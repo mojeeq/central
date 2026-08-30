@@ -63,6 +63,9 @@ export function createDesigner(ctx, record, onExit) {
     if (!item.id) item.id = uid();
     item.children = item.children || [];
     item.rules = item.rules || [];
+    // Rosters gained an explicit source; read older ones from their count.
+    item.source = item.source || (item.repeatCount ? 'count' : 'manual');
+    item.sourceList = item.sourceList || '';
     item.label = item.label || {};
     item.hint = item.hint || {};
     item.requiredMessage = item.requiredMessage || {};
@@ -375,18 +378,40 @@ export function createDesigner(ctx, record, onExit) {
         item.type,
         (v) => { item.type = v; markDirty(); refresh(); },
       )));
-      basics.push(localizedInput(item, 'hint', 'Hint', 'guidance shown under the question'));
+      basics.push(localizedInput(
+        item, 'hint',
+        item.type === 'list' ? 'Label for each item' : 'Hint',
+        item.type === 'list'
+          ? 'shown beside every box the interviewer types an item into'
+          : 'guidance shown under the question',
+      ));
     }
 
     sections.push(el('div', { class: 'section' }, [el('h3', { text: 'Basics' }), ...basics]));
 
     if (item.kind === 'group') {
+      const lists = listQuestionsBefore(item);
       sections.push(el('div', { class: 'section' }, [
         el('h3', { text: 'Section behaviour' }),
         checkbox('Repeat this section (roster)', item.repeat, (v) => { item.repeat = v; markDirty(); refresh(); }),
-        item.repeat ? field('Repeat count',
+        item.repeat ? field('Rows come from', select([
+          { value: 'manual', label: 'The interviewer adds them' },
+          { value: 'count', label: 'A number or expression' },
+          { value: 'list', label: 'One row per item in a list question' },
+        ], item.source || 'manual', (v) => { item.source = v; markDirty(); refresh(); })) : null,
+        item.repeat && item.source === 'count' ? field('Repeat count',
           input(item.repeatCount, (v) => { item.repeatCount = v; markDirty(); }, { class: 'mono' }),
-          'an expression such as ${hhsize}; leave blank to let the interviewer add rows') : null,
+          'an expression such as ${hhsize}') : null,
+        item.repeat && item.source === 'list' ? field('List question', select(
+          [{ value: '', label: lists.length ? '— choose a list —' : 'no list question above this one' },
+            ...lists.map((l) => ({ value: l.name, label: `${l.name}` }))],
+          item.sourceList,
+          (v) => { item.sourceList = v; markDirty(); scheduleValidate(); },
+        ), 'the roster gets one row per item listed there') : null,
+        item.repeat && item.source === 'list' && item.sourceList
+          ? el('p', { class: 'small muted', text:
+            `Refer to the item this row is about as \${${item.name}_item} — in labels, conditions or calculations.` })
+          : null,
         field('Relevance', input(item.relevant, (v) => { item.relevant = v; markDirty(); }, { class: 'mono' }),
           'ask this whole section only when true, e.g. ${age} > 17'),
         appearanceControl(item),
@@ -423,9 +448,9 @@ export function createDesigner(ctx, record, onExit) {
         !isDisplayOnly && item.required ? localizedInput(item, 'requiredMessage', 'Message when missing') : null,
         field('Relevance', input(item.relevant, (v) => { item.relevant = v; markDirty(); }, { class: 'mono' }),
           'show only when true, e.g. ${age} > 17'),
-        field('Calculation', input(item.calculation, (v) => { item.calculation = v; markDirty(); scheduleValidate(); }, { class: 'mono' }),
-          item.type === 'calculate' ? 'required for this type' : 'optional derived value'),
-        field('Default value', input(item.default, (v) => { item.default = v; markDirty(); })),
+        item.type !== 'list' ? field('Calculation', input(item.calculation, (v) => { item.calculation = v; markDirty(); scheduleValidate(); }, { class: 'mono' }),
+          item.type === 'calculate' ? 'required for this type' : 'optional derived value') : null,
+        item.type !== 'list' ? field('Default value', input(item.default, (v) => { item.default = v; markDirty(); })) : null,
         item.type === 'range' ? field('Parameters', input(item.parameters, (v) => { item.parameters = v; markDirty(); }, { class: 'mono' }),
           'e.g. start=0 end=100 step=5') : null,
         checkbox('Read only', item.readOnly, (v) => { item.readOnly = v; markDirty(); }),
@@ -459,6 +484,15 @@ export function createDesigner(ctx, record, onExit) {
     ]));
 
     sections.forEach((section) => propsHost.appendChild(section));
+  }
+
+  function listQuestionsBefore(target) {
+    const entries = walk();
+    const at = entries.findIndex(({ item }) => item.id === target.id);
+    return entries
+      .slice(0, at === -1 ? entries.length : at)
+      .map(({ item }) => item)
+      .filter((item) => item.kind === 'question' && item.type === 'list');
   }
 
   function newListFor(item) {

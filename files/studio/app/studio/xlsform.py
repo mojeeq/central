@@ -16,6 +16,7 @@ from typing import Any
 from openpyxl import Workbook, load_workbook
 
 from .models import (
+    ITEM_SUFFIX,
     QUESTION_TYPES,
     ChoiceList,
     ChoiceOption,
@@ -167,11 +168,31 @@ def _emit_items(
                 value = str(getattr(item, source) or "").strip()
                 if value:
                     row[target] = value
-            if item.repeat and item.repeatCount.strip():
-                row["repeat_count"] = item.repeatCount.strip()
+            if item.repeat:
+                if item.source == "list" and item.sourceList:
+                    # One row per item the interviewer listed.
+                    row["repeat_count"] = f"count(${{{item.sourceList}}})"
+                elif item.repeatCount.strip():
+                    row["repeat_count"] = item.repeatCount.strip()
             rows.append(row)
+
+            if item.repeat and item.source == "list" and item.sourceList:
+                # Carry the listed text into each row so questions can name it.
+                rows.append(
+                    {
+                        "type": "calculate",
+                        "name": item.item_name,
+                        "calculation": "indexed-repeat(${%s}, ${%s}, position(..))"
+                        % (f"{item.sourceList}{ITEM_SUFFIX}", item.sourceList),
+                    }
+                )
+
             _emit_items(item.children, rows, questionnaire, languages, multilingual, slugs)
             rows.append({"type": f"end_{keyword}", "name": item.name})
+            continue
+
+        if item.type == "list":
+            _emit_list(item, rows, languages, multilingual)
             continue
 
         row = _base_row(item, languages, multilingual)
@@ -219,6 +240,41 @@ def _emit_items(
 
         for index, rule in enumerate(item.rules_of("warning"), start=1):
             rows.append(_warning_row(item, rule, index, languages, multilingual))
+
+
+def _emit_list(
+    item: Item, rows: list[dict[str, str]], languages: list[str], multilingual: bool
+) -> None:
+    """A list question: a repeat the interviewer fills with one text box per item.
+
+    XLSForm has no list type. This is the shape ODK uses for it, and it is what
+    lets a later roster ask about each item in turn.
+    """
+    header: dict[str, str] = {"type": "begin_repeat", "name": item.name}
+    for column in _lang_columns("label", languages, multilingual):
+        language = column.split("::", 1)[1] if "::" in column else languages[0]
+        header[column] = _message_for(item.label, language)
+    if item.relevant.strip():
+        header["relevant"] = item.relevant.strip()
+    if item.appearance.strip():
+        header["appearance"] = item.appearance.strip()
+    rows.append(header)
+
+    entry: dict[str, str] = {"type": "text", "name": item.item_name}
+    for column in _lang_columns("label", languages, multilingual):
+        language = column.split("::", 1)[1] if "::" in column else languages[0]
+        entry[column] = _message_for(item.hint, language) or _message_for(item.label, language)
+    if item.required:
+        entry["required"] = "yes"
+    errors = item.rules_of("error")
+    if len(errors) == 1:
+        entry["constraint"] = errors[0].expression.strip()
+        for column in _lang_columns("constraint_message", languages, multilingual):
+            language = column.split("::", 1)[1] if "::" in column else languages[0]
+            entry[column] = _message_for(errors[0].message, language)
+    rows.append(entry)
+
+    rows.append({"type": "end_repeat", "name": item.name})
 
 
 def _base_row(item: Item, languages: list[str], multilingual: bool) -> dict[str, str]:
@@ -572,8 +628,58 @@ def _import_survey(
             )
         )
 
-    for index, row in enumerate(rows, start=2):
+    # A list question is a repeat holding a single text box named after it;
+    # recognise that shape rather than importing it as a bare repeat.
+    def _kind(row: dict[str, str]) -> str:
+        return (
+            re.sub(r"\s+", " ", _get(row, "type"))
+            .strip()
+            .replace("begin ", "begin_")
+            .replace("end ", "end_")
+            .split(" ", 1)[0]
+        )
+
+    list_at: dict[int, tuple[dict[str, str], dict[str, str]]] = {}
+    skip: set[int] = set()
+    for position in range(len(rows) - 2):
+        opener, entry, closer = rows[position], rows[position + 1], rows[position + 2]
+        name = _get(opener, "name")
+        if (
+            _kind(opener) == "begin_repeat"
+            and _kind(entry) == "text"
+            and _kind(closer) == "end_repeat"
+            and name
+            and _get(entry, "name") == f"{name}{ITEM_SUFFIX}"
+            and _get(closer, "name") == name
+        ):
+            list_at[position] = (opener, entry)
+            skip.update({position + 1, position + 2})
+
+    for position, row in enumerate(rows):
+        index = position + 2
+        if position in skip:
+            continue
+
+        if position in list_at:
+            opener, entry = list_at[position]
+            item = _common(opener, languages)
+            item.kind = "question"
+            item.type = "list"
+            item.hint = _localized(entry, "label", languages)
+            item.required = _get(entry, "required").lower() in _TRUE
+            item.relevant = _get(opener, "relevant")
+            item.appearance = _get(opener, "appearance")
+            item.rules = _recover_rules(item.name, entry, pickers, languages)
+            _attach(item, stack, root)
+            continue
+
         if _GENERATED_NAME.match(_get(row, "name")):
+            continue
+        if (
+            _kind(row) == "calculate"
+            and _get(row, "name").endswith(ITEM_SUFFIX)
+            and _get(row, "calculation").strip().startswith("indexed-repeat(")
+        ):
             continue
         raw_type = re.sub(r"\s+", " ", _get(row, "type")).strip()
         if not raw_type:
@@ -589,6 +695,16 @@ def _import_survey(
             item.repeatCount = _get(row, "repeat_count")
             item.relevant = _get(row, "relevant")
             item.appearance = _get(row, "appearance")
+            if item.repeat:
+                sourced = re.fullmatch(
+                    r"count\(\$\{([^}]+)\}\)", item.repeatCount.strip()
+                )
+                if sourced is not None:
+                    item.source = "list"
+                    item.sourceList = sourced.group(1)
+                    item.repeatCount = ""
+                elif item.repeatCount.strip():
+                    item.source = "count"
             _attach(item, stack, root)
             stack.append(item)
             continue

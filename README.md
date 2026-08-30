@@ -47,8 +47,6 @@ to Central:
   Central as XLSForms.
 * Fill the questionnaire in an interactive preview that runs your skip logic and
   validation live, before you publish anything.
-* Review incoming submissions in one place — approve, flag or reject them — and
-  create accounts, both governed by the roles Central already gives people.
 * Export submissions as **Stata (`.dta`)** and **SPSS (`.sav`)** files with
   variable labels, value labels and data types already applied, plus a codebook.
 

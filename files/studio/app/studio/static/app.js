@@ -4,8 +4,6 @@
 import { api, ApiError } from './api.js';
 import { createDesigner } from './designer.js';
 import { createExporter } from './exporter.js';
-import { createPeople } from './people.js';
-import { createReview } from './review.js';
 import { clear, confirmDialog, el, field, input, modal, select, spinner, toast } from './ui.js';
 
 const appHost = document.getElementById('app');
@@ -15,8 +13,6 @@ const ctx = {
   projects: [],
   project: null,
   questionTypes: [],
-  // What Central says this account may do here. Studio offers nothing beyond it.
-  permissions: { canDesign: true, canReview: false, canSeeSubmissions: true, isAdministrator: false },
   tab: 'design',
   view: null,
   typeSpec(type) {
@@ -83,17 +79,18 @@ function renderShell() {
   const projectPicker = select(
     ctx.projects.map((p) => ({ value: String(p.id), label: p.name + (p.archived ? ' (archived)' : '') })),
     ctx.project ? String(ctx.project.id) : '',
-    async (value) => {
+    (value) => {
       ctx.project = ctx.projects.find((p) => String(p.id) === value);
       localStorage.setItem('studio.project', value);
-      await loadPermissions();
-      renderShell();
+      renderBody();
     },
     { style: 'width:auto; max-width:260px' },
   );
 
-  const allowed = availableTabs();
-  const tabs = el('div', { class: 'tabs' }, allowed.map(([key, label]) => tabButton(key, label)));
+  const tabs = el('div', { class: 'tabs' }, [
+    tabButton('design', 'Questionnaires'),
+    tabButton('export', 'Export data'),
+  ]);
 
   appHost.appendChild(el('div', { class: 'topbar' }, [
     el('div', { class: 'brand' }, [document.createTextNode('Central '), el('span', { text: 'Studio' })]),
@@ -108,16 +105,6 @@ function renderShell() {
   const body = el('div', { class: 'page', id: 'body' });
   appHost.appendChild(body);
   renderBody();
-}
-
-// Only the tabs this account can actually use.
-function availableTabs() {
-  const tabs = [];
-  if (ctx.permissions.canDesign) tabs.push(['design', 'Questionnaires']);
-  if (ctx.permissions.canSeeSubmissions) tabs.push(['review', 'Review']);
-  if (ctx.permissions.canSeeSubmissions) tabs.push(['export', 'Export data']);
-  if (ctx.permissions.isAdministrator) tabs.push(['people', 'People']);
-  return tabs;
 }
 
 function tabButton(key, label) {
@@ -142,30 +129,9 @@ function renderBody() {
     return;
   }
 
-  const allowed = availableTabs().map(([key]) => key);
-  if (!allowed.includes(ctx.tab)) ctx.tab = allowed[0] || 'design';
-
   if (ctx.tab === 'export') {
     ctx.view = createExporter(ctx);
     body.appendChild(ctx.view);
-    return;
-  }
-  if (ctx.tab === 'review') {
-    ctx.view = createReview(ctx);
-    body.appendChild(ctx.view);
-    return;
-  }
-  if (ctx.tab === 'people') {
-    ctx.view = createPeople(ctx);
-    body.appendChild(ctx.view);
-    return;
-  }
-  if (!ctx.permissions.canDesign) {
-    body.appendChild(el('div', { class: 'panel' }, [
-      el('div', { class: 'empty', text:
-        'Your Central account cannot build forms in this project. Ask an administrator for the '
-        + 'Project Manager role if you need to.' }),
-    ]));
     return;
   }
 
@@ -363,23 +329,7 @@ async function start() {
   const remembered = localStorage.getItem('studio.project');
   ctx.project = ctx.projects.find((p) => String(p.id) === remembered) || ctx.projects[0] || null;
 
-  await loadPermissions();
   renderShell();
-}
-
-async function loadPermissions() {
-  if (!ctx.project) return;
-  try {
-    ctx.permissions = await api.permissions(ctx.project.id);
-  } catch (error) {
-    // Fall back to the least surprising thing: show nothing we are unsure of.
-    ctx.permissions = {
-      canDesign: false, canReview: false, canSeeSubmissions: false, isAdministrator: false,
-    };
-  }
-  // A supervisor should land on the review screen, not an empty designer.
-  const allowed = availableTabs().map(([key]) => key);
-  if (!allowed.includes(ctx.tab)) ctx.tab = allowed[0] || 'design';
 }
 
 window.addEventListener('studio:signed-out', () => {

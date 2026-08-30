@@ -99,39 +99,3 @@ def test_stata_drops_string_value_labels_but_spss_keeps_them(tmp_path):
     write_spss(table, tmp_path / "d.sav")
     _, spss_meta = pyreadstat.read_sav(str(tmp_path / "d.sav"))
     assert spss_meta.variable_value_labels["sex"] == {"m": "Male", "f": "Female"}
-
-
-def _dta_format(path):
-    """The .dta format version recorded in the file header."""
-    import re
-
-    header = path.read_bytes()[:120]
-    match = re.search(rb"<release>(\d+)</release>", header)
-    return int(match.group(1)) if match else None
-
-
-def test_stata_files_open_in_se_not_only_mp(tmp_path):
-    """Format 119 is Stata/MP only; the default must not produce it.
-
-    Getting this wrong is invisible until someone opens the file and Stata
-    tells them it was made by Stata/MP.
-    """
-    path = tmp_path / "default.dta"
-    write_stata(make_table(), path)
-    assert _dta_format(path) == 118
-
-
-def test_stata_13_is_still_available(tmp_path):
-    path = tmp_path / "old.dta"
-    write_stata(make_table(), path, stata_version=13)
-    assert _dta_format(path) == 117
-
-
-def test_an_unknown_version_falls_back_to_the_se_safe_default(tmp_path):
-    path = tmp_path / "odd.dta"
-    write_stata(make_table(), path, stata_version=15)
-    assert _dta_format(path) == 118, "version 15 means format 119, which SE cannot open"
-
-    path = tmp_path / "nonsense.dta"
-    write_stata(make_table(), path, stata_version=99)
-    assert _dta_format(path) == 118

@@ -164,6 +164,35 @@ them — and the exporter drops the columns, so your `.dta` and `.sav` files onl
 contain real answers. Importing a form Studio generated folds them back into
 rules rather than showing you the scaffolding.
 
+### Lists and the rosters that follow them
+
+A **List of items** question collects a variable-length list — household
+members, plots, businesses — and a roster can then take one row per item, so
+you list first and ask the details afterwards. This is the Survey Solutions
+list-question-and-roster pattern.
+
+Set it up in two steps:
+
+1. Add a **List of items** question, say `members`. Its *Label for each item*
+   labels the box the interviewer types each name into.
+2. Add a repeating section and set **Rows come from** to *One row per item in a
+   list question*, choosing `members`.
+
+Inside that roster, `${<roster>_item}` is the item the row is about, so a
+question labelled `How old is ${person_item}?` reads *How old is Ana?* on Ana's
+page. It works in conditions and calculations too.
+
+XLSForm has no list type, so this compiles to the shape ODK uses for it:
+
+| You build | Studio generates |
+| --- | --- |
+| A list question `members` | `begin_repeat members` holding one `text` named `members_item` |
+| A roster following it | `repeat_count = count(${members})`, plus a calculate `<roster>_item` set to `indexed-repeat(${members_item}, ${members}, position(..))` |
+
+`count(${members})` gives the number of items anywhere in the form. Importing a
+form Studio generated folds the repeat and the calculate back into a list
+question and its roster rather than showing the machinery.
+
 ### Interactive preview
 
 **Preview** opens the questionnaire as a form you can actually fill in. As you
@@ -175,9 +204,11 @@ meets them. Rosters gain and lose rows as their count question changes, and
 The preview evaluates expressions with a small engine of its own, covering the
 comparison, arithmetic and boolean operators and the common functions —
 `selected`, `count-selected`, `string-length`, `regex`, `today`, `if`, `concat`,
-`coalesce`, `substring`, `round` and friends. Anything outside that (for
-instance `indexed-repeat` or `position`) is reported on the question as not
-evaluated here and passed to Central untouched, rather than quietly guessed at.
+`coalesce`, `substring`, `round`, and the listing functions `count`,
+`position(..)` and `indexed-repeat`. `${...}` references in labels and hints are
+substituted as ODK does, so a roster row shows the item it is about. Anything
+outside that is reported on the question as not evaluated here and passed to
+Central untouched, rather than quietly guessed at.
 It is a simulation for checking wording and logic; publish a draft and open it in
 Central to test on a real device.
 

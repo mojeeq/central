@@ -342,3 +342,98 @@ def test_a_rule_without_an_expression_is_an_error():
     assert any(
         i.level == "error" and "no expression" in i.message for i in validate(questionnaire)
     )
+
+
+# -- list questions and the rosters they drive -----------------------------
+
+
+def household_listing():
+    return Questionnaire(
+        title="Household", formId="hh", languages=[EN], defaultLanguage=EN,
+        items=[
+            Item(kind="question", type="list", name="members",
+                 label={EN: "List everyone who lives here"}, hint={EN: "Name"}, required=True),
+            Item(kind="group", name="person", label={EN: "About each person"}, repeat=True,
+                 source="list", sourceList="members", children=[
+                     Item(kind="question", type="integer", name="age",
+                          label={EN: "How old is ${person_item}?"}),
+                 ]),
+        ],
+    )
+
+
+def test_a_list_question_becomes_a_repeat_of_one_text_box():
+    rows = sheets(xlsform.to_workbook(household_listing()))["survey"]
+    assert [r["type"] for r in rows[:3]] == ["begin_repeat", "text", "end_repeat"]
+    assert rows[0]["name"] == "members"
+    assert rows[0]["label"] == "List everyone who lives here"
+    # The hint labels the box each item is typed into.
+    assert rows[1]["name"] == "members_item"
+    assert rows[1]["label"] == "Name"
+    assert rows[1]["required"] == "yes"
+
+
+def test_a_roster_driven_by_a_list_counts_it_and_carries_the_item_across():
+    rows = sheets(xlsform.to_workbook(household_listing()))["survey"]
+    roster = next(r for r in rows if r["name"] == "person" and r["type"] == "begin_repeat")
+    assert roster["repeat_count"] == "count(${members})"
+
+    carried = next(r for r in rows if r["name"] == "person_item")
+    assert carried["type"] == "calculate"
+    assert carried["calculation"] == (
+        "indexed-repeat(${members_item}, ${members}, position(..))"
+    )
+
+
+def test_a_counted_roster_is_unaffected():
+    questionnaire = Questionnaire(
+        title="T", formId="t", languages=[EN], defaultLanguage=EN,
+        items=[Item(kind="group", name="r", label={EN: "R"}, repeat=True,
+                    source="count", repeatCount="${n}",
+                    children=[Item(kind="question", type="text", name="x", label={EN: "X"})])],
+    )
+    rows = sheets(xlsform.to_workbook(questionnaire))["survey"]
+    assert rows[0]["repeat_count"] == "${n}"
+    assert not any(r["name"].endswith("_item") for r in rows)
+
+
+def test_listings_round_trip():
+    restored, warnings = xlsform.from_workbook(xlsform.to_workbook(household_listing()))
+    assert warnings == []
+
+    items = {i.name: i for i, _ in restored.walk()}
+    # The generated text box and item calculate fold back in rather than
+    # appearing as questions of their own.
+    assert set(items) == {"members", "person", "age"}
+
+    assert items["members"].type == "list"
+    assert items["members"].hint[EN] == "Name"
+    assert items["members"].required is True
+
+    assert items["person"].repeat is True
+    assert items["person"].source == "list"
+    assert items["person"].sourceList == "members"
+    assert items["person"].repeatCount == ""
+
+
+def test_the_generated_item_name_is_reserved():
+    questionnaire = household_listing()
+    questionnaire.items.append(
+        Item(kind="question", type="text", name="members_item", label={EN: "clash"})
+    )
+    messages = [i.message for i in validate(questionnaire) if i.level == "error"]
+    assert any("Studio generates" in m for m in messages)
+
+
+def test_a_roster_cannot_precede_the_list_it_follows():
+    questionnaire = household_listing()
+    questionnaire.items.reverse()
+    messages = [i.message for i in validate(questionnaire) if i.level == "error"]
+    assert any("must come before" in m for m in messages)
+
+
+def test_a_roster_pointing_at_a_missing_list_is_an_error():
+    questionnaire = household_listing()
+    questionnaire.items[1].sourceList = "nope"
+    messages = [i.message for i in validate(questionnaire) if i.level == "error"]
+    assert any("not a list question" in m for m in messages)

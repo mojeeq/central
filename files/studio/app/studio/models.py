@@ -35,6 +35,7 @@ QUESTION_TYPES: dict[str, dict[str, Any]] = {
     "video": {"label": "Video", "group": "Media"},
     "file": {"label": "File upload", "group": "Media"},
     "barcode": {"label": "Barcode / QR", "group": "Media"},
+    "list": {"label": "List of items", "group": "Other", "listing": True},
     "note": {"label": "Note (display only)", "group": "Other"},
     "calculate": {"label": "Calculation", "group": "Other", "calculation": True},
     "acknowledge": {"label": "Acknowledge", "group": "Other"},
@@ -51,6 +52,10 @@ RESERVED_NAMES = {
 # Suffixes Studio appends when compiling validation rules into XLSForm. User
 # names must not collide with them.
 GENERATED_SUFFIX = re.compile(r"_studio_(msg(_[A-Za-z0-9]+)?|warn\d+)$")
+
+# A list question and a roster driven by one both generate a companion node
+# holding the item text.
+ITEM_SUFFIX = "_item"
 
 
 class Rule(BaseModel):
@@ -98,6 +103,10 @@ class Item(BaseModel):
     parameters: str = ""
     repeat: bool = False
     repeatCount: str = ""
+    # How a roster decides how many rows it has: the interviewer adds them,
+    # an expression counts them, or it follows a list question.
+    source: Literal["manual", "count", "list"] = "manual"
+    sourceList: str = ""
     rules: list[Rule] = Field(default_factory=list)
     children: list["Item"] = Field(default_factory=list)
 
@@ -121,6 +130,11 @@ class Item(BaseModel):
             self.constraint = ""
             self.constraintMessage = {}
         return self
+
+    @property
+    def item_name(self) -> str:
+        """The node holding each item's text, for lists and list-driven rosters."""
+        return f"{self.name}{ITEM_SUFFIX}"
 
     def rules_of(self, severity: str) -> list[Rule]:
         return [r for r in self.rules if r.severity == severity and r.expression.strip()]
@@ -219,6 +233,21 @@ def validate(questionnaire: Questionnaire) -> list[Issue]:
     names: set[str] = set()
     has_question = False
 
+    walked = questionnaire.walk()
+    order = {item.name: position for position, (item, _) in enumerate(walked)}
+    list_questions = {
+        item.name: position
+        for position, (item, _) in enumerate(walked)
+        if item.kind == "question" and item.type == "list"
+    }
+    # Nodes Studio will generate to hold item text.
+    generated_items = {
+        item.item_name
+        for item, _ in walked
+        if (item.kind == "question" and item.type == "list")
+        or (item.kind == "group" and item.repeat and item.source == "list")
+    }
+
     for item, trail in questionnaire.walk():
         where = "/".join(trail + [item.name or "(unnamed)"])
 
@@ -235,6 +264,18 @@ def validate(questionnaire: Questionnaire) -> list[Issue]:
             issues.append(Issue(level="error", where=where, message=f"Duplicate name '{item.name}'."))
         elif item.name.lower() in RESERVED_NAMES:
             issues.append(Issue(level="error", where=where, message=f"'{item.name}' is a reserved name."))
+        elif item.name in generated_items and not (
+            (item.kind == "question" and item.type == "list")
+            or (item.kind == "group" and item.repeat and item.source == "list")
+        ):
+            issues.append(
+                Issue(
+                    level="error",
+                    where=where,
+                    message=f"'{item.name}' is the name Studio generates for the items of a "
+                    "list; rename this item.",
+                )
+            )
         elif GENERATED_SUFFIX.search(item.name):
             issues.append(
                 Issue(
@@ -249,8 +290,39 @@ def validate(questionnaire: Questionnaire) -> list[Issue]:
         if item.kind == "group":
             if not item.children:
                 issues.append(Issue(level="warning", where=where, message="Group is empty."))
-            if item.repeat and item.repeatCount and not item.repeatCount.strip():
-                issues.append(Issue(level="warning", where=where, message="Repeat count is blank."))
+            if item.repeat and item.source == "count" and not item.repeatCount.strip():
+                issues.append(
+                    Issue(level="warning", where=where, message="Repeat count is blank.")
+                )
+            if item.repeat and item.source == "list":
+                if not item.sourceList:
+                    issues.append(
+                        Issue(level="error", where=where, message="No list question chosen.")
+                    )
+                elif item.sourceList not in list_questions:
+                    issues.append(
+                        Issue(
+                            level="error",
+                            where=where,
+                            message=f"'{item.sourceList}' is not a list question in this form.",
+                        )
+                    )
+                elif list_questions[item.sourceList] >= order[item.name]:
+                    issues.append(
+                        Issue(
+                            level="error",
+                            where=where,
+                            message=f"The list '{item.sourceList}' must come before this roster.",
+                        )
+                    )
+            if not item.repeat and item.source != "manual":
+                issues.append(
+                    Issue(
+                        level="warning",
+                        where=where,
+                        message="Only a repeating section takes rows from a list or a count.",
+                    )
+                )
             continue
 
         has_question = True

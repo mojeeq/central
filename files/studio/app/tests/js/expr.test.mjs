@@ -99,8 +99,7 @@ test('hyphenated function names are not read as subtraction', () => {
 });
 
 test('unsupported syntax is reported, not guessed', () => {
-  assert.throws(() => parse('position(..)'), ExprError);
-  assert.throws(() => parse('indexed-repeat(${a}, ${b}, 1)'), ExprError);
+  // position() and indexed-repeat() are supported; see the listing tests below.
   assert.throws(() => parse('. >'), ExprError);
   assert.throws(() => parse("'unclosed"), ExprError);
   assert.throws(() => parse('${unclosed'), ExprError);
@@ -113,4 +112,48 @@ test('realistic constraints from the docs', () => {
   assert.equal(run('. > 0 and . <= 30', 30), true);
   assert.equal(run('. > 0 and . <= 30', 31), false);
   assert.equal(run('${end} >= ${start}', null, { end: '2026-01-02', start: '2026-01-01' }), true);
+});
+
+// -- listing questions -----------------------------------------------------
+
+const listCtx = (rows, position, values = {}) => ({
+  self: null,
+  position,
+  get: (name) => (name in values ? values[name] : null),
+  rows: (name) => rows[name] || null,
+  today: new Date(2026, 7, 30),
+});
+
+test('count() of a repeat counts its rows, not its characters', () => {
+  const rows = { members: [{ members_item: 'Ana' }, { members_item: 'Bo' }] };
+  assert.equal(evaluate(parse('count(${members})'), listCtx(rows)), 2);
+});
+
+test('position(..) is the current row number', () => {
+  assert.equal(evaluate(parse('position(..)'), listCtx({}, 3)), 3);
+  assert.equal(evaluate(parse('position(..)'), listCtx({})), 1, 'defaults to the first row');
+});
+
+test('indexed-repeat() reads one row of a listing', () => {
+  const rows = { members: [{ members_item: 'Ana' }, { members_item: 'Bo' }, { members_item: 'Cy' }] };
+  const run = (n) => evaluate(
+    parse('indexed-repeat(${members_item}, ${members}, ' + n + ')'), listCtx(rows),
+  );
+  assert.equal(run(1), 'Ana');
+  assert.equal(run(3), 'Cy');
+  assert.equal(run(4), null, 'past the end of the list');
+});
+
+test('the roster idiom resolves per row', () => {
+  const rows = { members: [{ members_item: 'Ana' }, { members_item: 'Bo' }] };
+  const expression = 'indexed-repeat(${members_item}, ${members}, position(..))';
+  assert.equal(evaluate(parse(expression), listCtx(rows, 1)), 'Ana');
+  assert.equal(evaluate(parse(expression), listCtx(rows, 2)), 'Bo');
+});
+
+test('indexed-repeat() reports a missing repeat rather than guessing', () => {
+  assert.throws(
+    () => evaluate(parse('indexed-repeat(${a}, ${nope}, 1)'), listCtx({})),
+    ExprError,
+  );
 });

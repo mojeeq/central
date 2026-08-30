@@ -13,6 +13,7 @@ const GEO_TYPES = new Set(['geopoint', 'geotrace', 'geoshape']);
 
 export function openPreview(doc, language) {
   const top = Object.create(null);
+  const repeats = new Map();
   const state = { showAll: false, controllers: [], language };
 
   const text = (map) => {
@@ -24,9 +25,21 @@ export function openPreview(doc, language) {
 
   const listFor = (name) => doc.choiceLists.find((l) => l.name === name);
 
+  // ODK substitutes ${name} in labels and hints with the current answer; that
+  // is what puts each person's name on their own roster page.
+  const OUTPUT = /\$\{([^}]+)\}/g;
+  function substitute(source, scope) {
+    return String(source || '').replace(OUTPUT, (_, name) => {
+      const value = contextFor(scope, null).get(name.trim());
+      return helpers.isBlank(value) ? '' : helpers.toStringValue(value);
+    });
+  }
+
   function contextFor(scope, self) {
     return {
       self,
+      position: scope.__position,
+      rows: (name) => repeats.get(name) || null,
       get(name) {
         if (Object.prototype.hasOwnProperty.call(scope, name)) return scope[name];
         return Object.prototype.hasOwnProperty.call(top, name) ? top[name] : null;
@@ -171,21 +184,98 @@ export function openPreview(doc, language) {
 
   // -- building the form --------------------------------------------------
 
+  function buildList(item, scope, host) {
+    const itemName = `${item.name}_item`;
+    const rows = [];
+    repeats.set(item.name, rows);
+
+    const body = el('div', { class: 'body' });
+    const block = el('div', { class: 'preview-group' }, [
+      el('div', { class: 'head' }, [
+        el('span', { text: text(item.label) || item.name }),
+        el('span', { class: 'pill', text: 'list' }),
+      ]),
+      body,
+    ]);
+    host.appendChild(block);
+
+    const rowHost = el('div');
+    const feedback = el('div', { class: 'q-feedback' });
+    body.appendChild(rowHost);
+
+    function addRow(value) {
+      const rowScope = Object.create(null);
+      rowScope[itemName] = value ?? null;
+      const box = el('input', { type: 'text', placeholder: text(item.hint) || 'Item' });
+      box.value = value ?? '';
+      box.addEventListener('input', () => {
+        rowScope[itemName] = box.value === '' ? null : box.value;
+        refreshAll();
+      });
+      const line = el('div', { class: 'preview-list-row' }, [
+        el('span', { class: 'preview-code', text: String(rows.length + 1) }),
+        box,
+        el('button', { class: 'mini danger', text: 'Remove', onclick: () => {
+          const at = rows.indexOf(rowScope);
+          if (at !== -1) { rows.splice(at, 1); line.remove(); refreshAll(); }
+        } }),
+      ]);
+      rows.push(rowScope);
+      rowHost.appendChild(line);
+      rowScope.__line = line;
+    }
+
+    body.appendChild(el('div', {}, [
+      el('button', { class: 'mini', text: '+ Add item', onclick: () => { addRow(); refreshAll(); } }),
+    ]));
+    body.appendChild(feedback);
+    addRow();
+
+    return {
+      refresh() {
+        const relevant = evaluateOr(item.relevant, scope, null, true);
+        const shown = relevant && relevant.unevaluated !== undefined ? true : helpers.toBoolean(relevant);
+        block.hidden = !shown;
+        if (!shown) return;
+        rows.forEach((row, index) => {
+          row.__position = index + 1;
+          row.__line.firstChild.textContent = String(index + 1);
+        });
+        clear(feedback);
+        if (state.showAll && item.required && !rows.some((r) => !helpers.isBlank(r[itemName]))) {
+          feedback.appendChild(el('div', { class: 'q-error', text: 'List at least one item.' }));
+        }
+      },
+      collect(out) {
+        if (block.hidden) return;
+        if (item.required && !rows.some((r) => !helpers.isBlank(r[itemName]))) {
+          out.errors += 1;
+          if (!out.first) out.first = block;
+        }
+      },
+    };
+  }
+
   function buildItems(items, scope, host) {
     const controllers = [];
     for (const item of items) {
-      controllers.push(
-        item.kind === 'group' ? buildGroup(item, scope, host) : buildQuestion(item, scope, host),
-      );
+      if (item.kind === 'question' && item.type === 'list') {
+        controllers.push(buildList(item, scope, host));
+      } else {
+        controllers.push(
+          item.kind === 'group' ? buildGroup(item, scope, host) : buildQuestion(item, scope, host),
+        );
+      }
     }
     return controllers;
   }
 
   function buildGroup(item, scope, host) {
     const body = el('div', { class: 'body' });
+    const heading = el('span', { text: text(item.label) || item.name });
     const block = el('div', { class: 'preview-group' }, [
       el('div', { class: 'head' }, [
-        el('span', { text: text(item.label) || item.name }),
+        heading,
         item.repeat ? el('span', { class: 'pill', text: 'repeats' }) : null,
       ]),
       body,
@@ -200,14 +290,17 @@ export function openPreview(doc, language) {
           const shown = relevant && relevant.unevaluated === undefined
             ? helpers.toBoolean(relevant) : true;
           block.hidden = !shown;
+          heading.textContent = substitute(text(item.label) || item.name, scope);
           if (shown) children.forEach((c) => c.refresh());
         },
         collect(out) { children.forEach((c) => c.collect(out)); },
       };
     }
 
-    // A roster: rows the interviewer can add, or a count driven by an answer.
+    // A roster: rows the interviewer adds, a count, or one per listed item.
     const rows = [];
+    const scopes = [];
+    repeats.set(item.name, scopes);
     const rowHost = el('div');
     const controls = el('div', { class: 'preview-repeat-controls' });
     body.appendChild(rowHost);
@@ -225,7 +318,7 @@ export function openPreview(doc, language) {
       ]);
       const remove = el('button', { class: 'mini danger', text: 'Remove', onclick: () => {
         const at = rows.findIndex((r) => r.wrapper === wrapper);
-        if (at !== -1) { rows.splice(at, 1); wrapper.remove(); refreshAll(); }
+        if (at !== -1) { rows.splice(at, 1); scopes.splice(at, 1); wrapper.remove(); refreshAll(); }
       } });
       header.appendChild(remove);
       wrapper.appendChild(header);
@@ -234,6 +327,7 @@ export function openPreview(doc, language) {
       rowHost.appendChild(wrapper);
       const children = buildItems(item.children, rowScope, inner);
       rows.push({ wrapper, scope: rowScope, children, remove, header });
+      scopes.push(rowScope);
     }
 
     controls.appendChild(el('button', { class: 'mini', text: '+ Add row', onclick: () => {
@@ -249,18 +343,40 @@ export function openPreview(doc, language) {
         block.hidden = !shown;
         if (!shown) return;
 
-        const counted = evaluateOr(item.repeatCount, scope, null, null);
-        const fixed = counted !== null && counted !== undefined
-          && counted.unevaluated === undefined && !Number.isNaN(helpers.toNumber(counted));
+        const source = item.source || (item.repeatCount ? 'count' : 'manual');
+        const listRows = source === 'list' ? repeats.get(item.sourceList) : null;
+
+        let wanted = null;
+        if (source === 'list') {
+          wanted = listRows ? listRows.length : 0;
+        } else if (source === 'count') {
+          const counted = evaluateOr(item.repeatCount, scope, null, null);
+          if (counted !== null && counted !== undefined
+              && counted.unevaluated === undefined && !Number.isNaN(helpers.toNumber(counted))) {
+            wanted = Math.max(0, Math.trunc(helpers.toNumber(counted)));
+          }
+        }
+
+        const fixed = wanted !== null;
         if (fixed) {
-          const wanted = Math.max(0, Math.trunc(helpers.toNumber(counted)));
           while (rows.length < wanted) addRow();
-          while (rows.length > wanted) { rows.pop().wrapper.remove(); }
+          while (rows.length > wanted) { rows.pop().wrapper.remove(); scopes.pop(); }
         }
         controls.hidden = fixed;
+
         rows.forEach((row, index) => {
+          row.scope.__position = index + 1;
           row.remove.hidden = fixed;
-          row.header.firstChild.textContent = `${text(item.label) || item.name} ${index + 1}`;
+
+          // A roster driven by a list carries that item's text into the row.
+          let caption = `${text(item.label) || item.name} ${index + 1}`;
+          if (source === 'list' && listRows) {
+            const listItem = listRows[index];
+            const value = listItem ? listItem[`${item.sourceList}_item`] : null;
+            row.scope[`${item.name}_item`] = value ?? null;
+            if (!helpers.isBlank(value)) caption = String(value);
+          }
+          row.header.firstChild.textContent = caption;
           row.children.forEach((c) => c.refresh());
         });
       },
@@ -269,13 +385,12 @@ export function openPreview(doc, language) {
   }
 
   function buildQuestion(item, scope, host) {
+    const labelText = el('span');
     const label = el('div', { class: 'q-label' }, [
-      el('span', { text: text(item.label) || item.name }),
+      labelText,
       item.required ? el('span', { class: 'req', text: ' *' }) : null,
     ]);
-    const hint = text(item.hint)
-      ? el('div', { class: 'q-hint', text: text(item.hint) })
-      : null;
+    const hint = el('div', { class: 'q-hint' });
     const feedback = el('div', { class: 'q-feedback' });
     const control = renderInput(item, scope, () => refreshAll());
 
@@ -298,6 +413,11 @@ export function openPreview(doc, language) {
           if (!helpers.isBlank(scope[item.name])) delete scope[item.name];
           return;
         }
+
+        labelText.textContent = substitute(text(item.label) || item.name, scope);
+        const hintText = substitute(text(item.hint), scope);
+        hint.textContent = hintText;
+        hint.hidden = hintText === '';
 
         if (item.type === 'calculate') {
           const computed = evaluateOr(item.calculation, scope, null, '');

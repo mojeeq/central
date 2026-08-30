@@ -9,7 +9,7 @@ export class ExprError extends Error {}
 
 // Hyphenated names must be matched before the '-' operator gets a chance.
 const FUNCTIONS = [
-  'count-selected', 'string-length', 'selected-at', 'boolean-from-string',
+  'indexed-repeat', 'count-selected', 'string-length', 'selected-at', 'boolean-from-string',
   'format-date', 'decimal-date-time', 'starts-with', 'ends-with',
   'substring-before', 'substring-after', 'regex', 'selected', 'concat',
   'coalesce', 'substring', 'contains', 'translate', 'string', 'number',
@@ -56,7 +56,7 @@ function tokenize(source) {
 
     // '.' on its own is the value of the question being validated.
     if (ch === '.') {
-      if (source[i + 1] === '.') throw new ExprError("'..' is not supported in preview");
+      if (source[i + 1] === '.') { tokens.push({ type: 'parent' }); i += 2; continue; }
       tokens.push({ type: 'self' });
       i += 1;
       continue;
@@ -143,6 +143,7 @@ export function parse(source) {
       return { kind: 'literal', value: token.value };
     }
     if (token.type === 'self') { pos += 1; return { kind: 'self' }; }
+    if (token.type === 'parent') { pos += 1; return { kind: 'parent' }; }
     if (token.type === 'ref') { pos += 1; return { kind: 'ref', name: token.value }; }
     if (token.type === '(') {
       pos += 1;
@@ -268,6 +269,7 @@ const CALLS = {
   'boolean-from-string': (a) => ['true', '1'].includes(toStringValue(a[0]).toLowerCase()),
   'true': () => true,
   'false': () => false,
+  'indexed-repeat': () => { throw new ExprError('indexed-repeat() is handled separately'); },
   'sum': (a) => a.reduce((total, v) => total + (Number.isNaN(toNumber(v)) ? 0 : toNumber(v)), 0),
   'min': (a) => Math.min(...a.map(toNumber)),
   'max': (a) => Math.max(...a.map(toNumber)),
@@ -277,11 +279,13 @@ export function evaluate(ast, context = {}) {
   const self = () => (context.self === undefined ? null : context.self);
   const lookup = (name) => (context.get ? context.get(name) : null);
   const today = () => isoDate(context.today instanceof Date ? context.today : new Date());
+  const rowsOf = (name) => (context.rows ? context.rows(name) : null);
 
   function walk(node) {
     switch (node.kind) {
       case 'literal': return node.value;
       case 'self': return self();
+      case 'parent': return null;
       case 'ref': return lookup(node.name);
       case 'negate': return -toNumber(walk(node.value));
       case 'binary': {
@@ -304,11 +308,39 @@ export function evaluate(ast, context = {}) {
       }
       case 'call': {
         if (node.name === 'today' || node.name === 'now') return today();
+
+        // position(..) is the current row number inside a repeat.
+        if (node.name === 'position') {
+          return context.position === undefined ? 1 : context.position;
+        }
+
+        // count(${repeat}) counts rows, so it needs the name rather than a value.
         if (node.name === 'count') {
-          const value = walk(node.args[0]);
+          const argument = node.args[0];
+          if (argument && argument.kind === 'ref') {
+            const rows = rowsOf(argument.name);
+            if (rows) return rows.length;
+          }
+          const value = walk(argument);
           return Array.isArray(value) ? value.length : tokensOf(value).length;
         }
-        if (node.name === 'position' || node.name === 'once' || node.name === 'uuid') {
+
+        // indexed-repeat(${field}, ${repeat}, n) reads one row of a repeat.
+        if (node.name === 'indexed-repeat') {
+          const [field, repeat, index] = node.args;
+          if (!field || field.kind !== 'ref' || !repeat || repeat.kind !== 'ref') {
+            throw new ExprError('indexed-repeat() needs ${field} and ${repeat} references');
+          }
+          const rows = rowsOf(repeat.name);
+          if (!rows) throw new ExprError(`no repeat named '${repeat.name}'`);
+          const at = Math.trunc(toNumber(walk(index)));
+          const row = rows[at - 1];
+          if (!row) return null;
+          const value = row[field.name];
+          return value === undefined ? null : value;
+        }
+
+        if (node.name === 'once' || node.name === 'uuid') {
           throw new ExprError(`${node.name}() is not supported in preview`);
         }
         const fn = CALLS[node.name];

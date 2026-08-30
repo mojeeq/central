@@ -361,3 +361,6 @@ table.grid tbody tr:hover { background: var(--ss-gray-highlight); }
 .preview-repeat-row { border: 1px dashed var(--line); border-radius: var(--radius); padding: 10px; margin-bottom: 10px; }
 .preview-repeat-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .preview-repeat-controls { margin-top: 4px; }
+
+.preview-list-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.preview-list-row input { max-width: 340px; }

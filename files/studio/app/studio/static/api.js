@@ -62,6 +62,26 @@ export const api = {
     return this.request(`/projects/${projectId}/forms/${encodeURIComponent(formId)}/meta`);
   },
   questionTypes() { return this.request('/question-types'); },
+  permissions(projectId) { return this.request(`/projects/${projectId}/permissions`); },
+  submissions(projectId, formId) {
+    return this.request(`/projects/${projectId}/forms/${encodeURIComponent(formId)}/submissions`);
+  },
+  reviewSubmission(projectId, formId, instanceId, reviewState) {
+    return this.request(
+      `/projects/${projectId}/forms/${encodeURIComponent(formId)}`
+      + `/submissions/${encodeURIComponent(instanceId)}/review`,
+      { method: 'POST', body: { reviewState } },
+    );
+  },
+  people() { return this.request('/people'); },
+  createPerson(body) { return this.request('/people', { method: 'POST', body }); },
+  projectPeople(projectId) { return this.request(`/projects/${projectId}/people`); },
+  grantRole(projectId, actorId, role) {
+    return this.request(`/projects/${projectId}/people`, { method: 'POST', body: { actorId, role } });
+  },
+  revokeRole(projectId, actorId, role) {
+    return this.request(`/projects/${projectId}/people`, { method: 'DELETE', body: { actorId, role } });
+  },
   questionnaires(projectId) { return this.request(`/questionnaires?projectId=${projectId}`); },
   questionnaire(id) { return this.request(`/questionnaires/${id}`); },
   createQuestionnaire(projectId, document) {

@@ -35,11 +35,12 @@ MEMBER_CSV = "name,sex,age,langs,PARENT_KEY,KEY\nAna,2,34,en fj,uuid:a,uuid:a/me
 def stub_central(monkeypatch):
     published = {}
 
-    def current_user(self):
+    def current_user(self, extended=False):
         user = USERS.get(self.token)
         if user is None:
             raise CentralError(401, "expired")
-        return user
+        # Studio asks for verbs; these accounts are plain project members.
+        return {**user, "verbs": []} if extended else user
 
     def projects(self):
         current_user(self)

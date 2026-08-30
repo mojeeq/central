@@ -28,7 +28,7 @@ class ExportRequest:
     split_select_multiples: bool = True
     keep_multiple_raw: bool = True
     drop_attachments: bool = False
-    stata_version: int = 15
+    stata_version: int = 14
     odata_filter: str | None = None
 
     def validate(self) -> None:

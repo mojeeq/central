@@ -21,7 +21,7 @@ export function createExporter(ctx) {
       splitSelectMultiples: true,
       keepMultipleRaw: true,
       dropAttachments: false,
-      stataVersion: 15,
+      stataVersion: 14,
       filter: '',
     },
   };
@@ -130,10 +130,10 @@ export function createExporter(ctx) {
       checkbox('CSV', state.options.formats.includes('csv'), (v) => toggleFormat('csv', v)),
     ]));
     body.appendChild(field('Stata version', select([
-      { value: '15', label: 'Stata 14 and later (recommended)' },
-      { value: '14', label: 'Stata 13' },
-      { value: '13', label: 'Stata 12' },
-    ], String(state.options.stataVersion), (v) => { state.options.stataVersion = Number(v); })));
+      { value: '14', label: 'Stata 14 and later (recommended)' },
+      { value: '13', label: 'Stata 13' },
+    ], String(state.options.stataVersion), (v) => { state.options.stataVersion = Number(v); }),
+      'both open in Stata/SE as well as Stata/MP'));
 
     body.appendChild(el('h3', { text: 'Labels and codes', style: 'margin-top:20px' }));
     if (meta.languages.length > 1) {

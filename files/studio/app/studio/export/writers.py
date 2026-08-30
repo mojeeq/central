@@ -162,34 +162,10 @@ def render(table: Table, spec: FormatSpec) -> RenderedTable:
     return RenderedTable(frame, column_labels, value_labels, renames, notes)
 
 
-# pyreadstat's `version` selects the .dta format, and the mapping matters:
-#
-#   13 -> format 117   Stata 13 and later, no unicode
-#   14 -> format 118   Stata 14 and later, unicode, up to 32,767 variables
-#   15 -> format 119   more than 32,767 variables — Stata/MP only
-#
-# Format 119 is the one Stata/SE refuses with "created by Stata MP", so it is
-# used only when a dataset genuinely has too many variables for 118.
-STATA_DEFAULT_VERSION = 14
-_STATA_118_MAX_VARIABLES = 32_767
-
-
-def write_stata(table: Table, path: Path, stata_version: int = STATA_DEFAULT_VERSION) -> list[str]:
+def write_stata(table: Table, path: Path, stata_version: int = 15) -> list[str]:
     rendered = render(table, STATA)
-    notes = list(rendered.notes)
-
-    if stata_version not in (13, 14):
-        stata_version = STATA_DEFAULT_VERSION
-
-    columns = len(rendered.frame.columns)
-    if columns > _STATA_118_MAX_VARIABLES:
-        # Nothing else can hold this many variables.
+    if stata_version not in (13, 14, 15):
         stata_version = 15
-        notes.append(
-            f"{columns} variables exceeds Stata's {_STATA_118_MAX_VARIABLES} limit, so this "
-            "file uses .dta format 119, which only Stata/MP can open"
-        )
-
     pyreadstat.write_dta(
         rendered.frame,
         str(path),
@@ -198,7 +174,7 @@ def write_stata(table: Table, path: Path, stata_version: int = STATA_DEFAULT_VER
         variable_value_labels=rendered.value_labels,
         version=stata_version,
     )
-    return notes
+    return rendered.notes
 
 
 def write_spss(table: Table, path: Path) -> list[str]:

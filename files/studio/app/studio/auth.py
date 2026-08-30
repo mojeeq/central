@@ -21,27 +21,10 @@ _CACHE_TTL = 30.0
 _CACHE_MAX = 512
 
 
-# What Studio needs a caller to be able to do, expressed in Central's verbs.
-# Studio grants nothing of its own: these are checked against what Central says
-# the account may already do.
-ADMIN_VERBS = frozenset({"user.create", "assignment.create"})
-REVIEW_VERB = "submission.update"
-READ_SUBMISSIONS_VERB = "submission.read"
-
-
 @dataclass
 class Caller:
     token: str
     user: dict[str, Any]
-
-    @property
-    def verbs(self) -> set[str]:
-        """The caller's sitewide verbs, as reported by Central."""
-        return set(self.user.get("verbs") or [])
-
-    @property
-    def is_administrator(self) -> bool:
-        return ADMIN_VERBS.issubset(self.verbs)
 
     @property
     def client(self) -> Client:
@@ -66,9 +49,7 @@ def _verify(token: str) -> dict[str, Any]:
     if cached and cached[0] > time.monotonic():
         return cached[1]
     try:
-        # Extended metadata carries the caller's verbs, which is how Studio
-        # decides what to offer without inventing permissions of its own.
-        user = Client(token=token).current_user(extended=True)
+        user = Client(token=token).current_user()
     except CentralError as exc:
         if exc.status in (401, 403):
             raise HTTPException(status_code=401, detail="Session expired. Sign in again.")
@@ -113,30 +94,3 @@ def require_project_access(caller: Caller, project_id: int) -> dict[str, Any]:
 
 
 CallerDep = Depends(require_caller)
-
-
-def require_administrator(caller: Caller) -> None:
-    """Only a Central administrator manages accounts."""
-    if not caller.is_administrator:
-        raise HTTPException(
-            status_code=403,
-            detail="Only a Central administrator can manage accounts.",
-        )
-
-
-def project_verbs(caller: Caller, project_id: int) -> set[str]:
-    require_project_access(caller, project_id)
-    try:
-        return set(caller.client.project_verbs(project_id))
-    except CentralError as exc:
-        raise HTTPException(status_code=502, detail=f"Central is unavailable: {exc.message}")
-
-
-def require_project_verb(caller: Caller, project_id: int, verb: str) -> set[str]:
-    verbs = project_verbs(caller, project_id)
-    if verb not in verbs:
-        raise HTTPException(
-            status_code=403,
-            detail="Your Central account does not have permission to do that in this project.",
-        )
-    return verbs

@@ -35,16 +35,7 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from . import __version__, auth, db, xlsform
-from .auth import (
-    READ_SUBMISSIONS_VERB,
-    REVIEW_VERB,
-    Caller,
-    project_verbs,
-    require_administrator,
-    require_caller,
-    require_project_access,
-    require_project_verb,
-)
+from .auth import Caller, require_caller, require_project_access
 from .central import XLSX_MIME, CentralError, Client
 from .config import settings
 from .export import schema as schema_mod
@@ -139,174 +130,7 @@ def sign_out(caller: Caller = Depends(require_caller)) -> Response:
 
 @api.get("/me")
 def me(caller: Caller = Depends(require_caller)) -> dict[str, Any]:
-    """The signed-in user, plus what Studio should offer them."""
-    return {
-        **caller.user,
-        "isAdministrator": caller.is_administrator,
-    }
-
-
-# -- what the caller may do ------------------------------------------------
-
-
-@api.get("/projects/{project_id}/permissions")
-def permissions(
-    project_id: int, caller: Caller = Depends(require_caller)
-) -> dict[str, Any]:
-    """Central decides; Studio only reports it so the UI can match."""
-    verbs = project_verbs(caller, project_id)
-    return {
-        "verbs": sorted(verbs),
-        "canDesign": "form.create" in verbs,
-        "canReview": REVIEW_VERB in verbs,
-        "canSeeSubmissions": READ_SUBMISSIONS_VERB in verbs,
-        "isAdministrator": caller.is_administrator,
-    }
-
-
-# -- reviewing submissions -------------------------------------------------
-
-
-REVIEW_STATES = ("approved", "hasIssues", "rejected", "null")
-
-
-@api.get("/projects/{project_id}/forms/{xml_form_id}/submissions")
-def list_submissions(
-    project_id: int, xml_form_id: str, caller: Caller = Depends(require_caller)
-) -> dict[str, Any]:
-    verbs = require_project_verb(caller, project_id, READ_SUBMISSIONS_VERB)
-    rows = caller.client.submissions(project_id, xml_form_id)
-    return {
-        "canReview": REVIEW_VERB in verbs,
-        "submissions": [
-            {
-                "instanceId": row.get("instanceId"),
-                "submitter": (row.get("submitter") or {}).get("displayName"),
-                "createdAt": row.get("createdAt"),
-                "updatedAt": row.get("updatedAt"),
-                "reviewState": row.get("reviewState"),
-                "deviceId": row.get("deviceId"),
-            }
-            for row in rows
-            if not row.get("deletedAt")
-        ],
-    }
-
-
-class ReviewBody(BaseModel):
-    reviewState: str
-
-
-@api.post("/projects/{project_id}/forms/{xml_form_id}/submissions/{instance_id}/review")
-def review_submission(
-    project_id: int,
-    xml_form_id: str,
-    instance_id: str,
-    body: ReviewBody,
-    caller: Caller = Depends(require_caller),
-) -> dict[str, Any]:
-    require_project_verb(caller, project_id, REVIEW_VERB)
-    if body.reviewState not in REVIEW_STATES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"reviewState must be one of {', '.join(REVIEW_STATES)}",
-        )
-    state = None if body.reviewState == "null" else body.reviewState
-    updated = caller.client.review_submission(project_id, xml_form_id, instance_id, state)
-    return {"instanceId": instance_id, "reviewState": updated.get("reviewState")}
-
-
-# -- managing accounts -----------------------------------------------------
-
-
-@api.get("/people")
-def list_people(caller: Caller = Depends(require_caller)) -> dict[str, Any]:
-    require_administrator(caller)
-    return {
-        "users": [
-            {"id": u.get("id"), "email": u.get("email"), "displayName": u.get("displayName")}
-            for u in caller.client.users()
-        ],
-        "roles": [
-            {"id": r.get("id"), "system": r.get("system"), "name": r.get("name")}
-            for r in caller.client.roles()
-            if r.get("system") in ("manager", "viewer", "formfill")
-        ],
-    }
-
-
-class NewUser(BaseModel):
-    email: str
-    password: str | None = None
-    projectId: int | None = None
-    role: str | None = None
-
-
-@api.post("/people", status_code=201)
-def create_person(
-    body: NewUser, caller: Caller = Depends(require_caller)
-) -> dict[str, Any]:
-    require_administrator(caller)
-    created = caller.client.create_user(body.email.strip(), body.password)
-
-    assigned = None
-    if body.projectId is not None and body.role:
-        # Best effort: the account exists either way, so report the outcome
-        # rather than failing the whole request.
-        try:
-            caller.client.assign_role(body.projectId, body.role, created["id"])
-            assigned = body.role
-        except CentralError as exc:
-            return {
-                "user": created,
-                "assignedRole": None,
-                "warning": f"The account was created, but the role was not assigned: {exc.message}",
-            }
-    return {"user": created, "assignedRole": assigned}
-
-
-@api.get("/projects/{project_id}/people")
-def project_people(
-    project_id: int, caller: Caller = Depends(require_caller)
-) -> list[dict[str, Any]]:
-    require_administrator(caller)
-    require_project_access(caller, project_id)
-    out = []
-    for assignment in caller.client.project_assignments(project_id):
-        actor = assignment.get("actor") or {}
-        out.append(
-            {
-                "actorId": assignment.get("actorId") or actor.get("id"),
-                "displayName": actor.get("displayName"),
-                "roleId": assignment.get("roleId"),
-            }
-        )
-    return out
-
-
-class RoleChange(BaseModel):
-    actorId: int
-    role: str
-
-
-@api.post("/projects/{project_id}/people")
-def grant_role(
-    project_id: int, body: RoleChange, caller: Caller = Depends(require_caller)
-) -> Response:
-    require_administrator(caller)
-    require_project_access(caller, project_id)
-    caller.client.assign_role(project_id, body.role, body.actorId)
-    return Response(status_code=204)
-
-
-@api.delete("/projects/{project_id}/people")
-def revoke_role(
-    project_id: int, body: RoleChange, caller: Caller = Depends(require_caller)
-) -> Response:
-    require_administrator(caller)
-    require_project_access(caller, project_id)
-    caller.client.revoke_role(project_id, body.role, body.actorId)
-    return Response(status_code=204)
+    return caller.user
 
 
 # -- browsing Central ------------------------------------------------------
@@ -369,7 +193,7 @@ class ExportBody(BaseModel):
     splitSelectMultiples: bool = True
     keepMultipleRaw: bool = True
     dropAttachments: bool = False
-    stataVersion: int = 14
+    stataVersion: int = 15
     filter: str | None = None
 
 

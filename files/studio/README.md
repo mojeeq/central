@@ -52,42 +52,6 @@ also entirely optional: if a future Central release renames the navbar list, no
 link is added and Central is unaffected. To remove the link, drop the `RUN` block
 from `nginx.dockerfile` and rebuild nginx.
 
-## Who can do what
-
-Studio has no accounts of its own. It asks Central what the signed-in user may
-do and offers only that, so a permission cannot be gained by using Studio
-instead of Central.
-
-| Central role | In Studio |
-| --- | --- |
-| Administrator | Everything, plus **People** for creating accounts and assigning roles |
-| Project Manager | Designs questionnaires, reviews submissions, exports data |
-| Project Viewer | Sees submissions and exports data; cannot review or design |
-
-The tabs follow from that: someone who cannot build forms never sees
-**Questionnaires**, and a supervisor lands on **Review** instead.
-
-### Reviewing submissions
-
-**Review** lists the submissions arriving for a form with who sent them and
-when, filtered by state, and offers **Approve**, **Has issues** and **Reject**.
-These are Central's own review states — the same ones its submission table and
-the `__system/reviewState` OData field show — so a decision made here is visible
-everywhere in Central, and can be used to filter an export.
-
-### Accounts
-
-**People** lists the web accounts, shows each person's role in the current
-project, and creates accounts. Leave the password blank and Central emails a
-set-up link, exactly as it does for an account created in Central itself.
-
-One thing worth knowing before assigning roles: **Central has no review-only
-role.** The ability to approve and reject is the `submission.update` verb, which
-belongs to Project Manager, and that role also allows editing the project's
-forms. A supervisor who should review but not design would need a new role in
-central-backend, which is outside this repository. Project Viewer is the
-read-only option, but it cannot review.
-
 ## Statistical export
 
 Export starts from Central's own CSV export, so the columns match what the
@@ -108,8 +72,7 @@ Central UI produces, and then re-attaches everything CSV throws away:
 Options on the export screen:
 
 * **Formats** — Stata, SPSS and/or CSV, in one archive.
-* **Stata version** — Stata 14 and later (the default), or Stata 13. Both open
-  in Stata/SE as well as Stata/MP.
+* **Stata version** — 12, 13, or 14-and-later.
 * **Label language** — for multilingual forms.
 * **Single-select answers** — numeric codes with value labels (the default,
   and what most analysis expects), or the original text codes. Where a form's
@@ -127,10 +90,6 @@ Every archive also contains:
 
 ### Things worth knowing
 
-* **The default `.dta` is format 118**, which Stata 14 onwards reads in SE, IC
-  and MP alike. Format 119, which only Stata/MP can open, is used only if a
-  dataset somehow exceeds 32,767 variables, and the archive's README says so
-  when that happens.
 * **Names are rewritten** to what each package accepts. ODK's `-` separator
   becomes `_`, names are cut to 32 characters for Stata and 64 for SPSS, and
   collisions get a numeric suffix. The codebook maps every original column to
@@ -354,8 +313,6 @@ against each other end to end.
 | `studio/export/dataset.py` | CSV → typed, labelled tables |
 | `studio/export/writers.py` | Tables → `.dta` / `.sav` / `.csv` / codebook |
 | `studio/export/service.py` | Fetch, build, bundle |
-| `studio/static/review.js` | The supervisor's submission review screen |
-| `studio/static/people.js` | The administrator's accounts screen |
 | `studio/static/expr.js` | The preview's XPath-subset evaluator |
 | `studio/static/preview.js` | The interactive, fillable preview |
 | `studio/static/` | The browser app (no build step) |

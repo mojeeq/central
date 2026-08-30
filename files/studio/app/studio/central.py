@@ -89,96 +89,9 @@ class Client:
             if response.status_code not in (200, 403, 404):
                 _raise_for_status(response)
 
-    def current_user(self, extended: bool = False) -> dict[str, Any]:
-        """The signed-in user. `extended` also returns their sitewide verbs."""
-        headers = self._headers()
-        if extended:
-            headers["X-Extended-Metadata"] = "true"
+    def current_user(self) -> dict[str, Any]:
         with self._client() as http:
-            response = http.get("/v1/users/current", headers=headers)
-            _raise_for_status(response)
-            return response.json()
-
-    # -- people -----------------------------------------------------------
-
-    def users(self) -> list[dict[str, Any]]:
-        with self._client() as http:
-            response = http.get("/v1/users", headers=self._headers())
-            _raise_for_status(response)
-            return response.json()
-
-    def create_user(self, email: str, password: str | None = None) -> dict[str, Any]:
-        payload: dict[str, Any] = {"email": email}
-        if password:
-            payload["password"] = password
-        with self._client() as http:
-            response = http.post("/v1/users", json=payload, headers=self._headers())
-            _raise_for_status(response)
-            return response.json()
-
-    def roles(self) -> list[dict[str, Any]]:
-        with self._client() as http:
-            response = http.get("/v1/roles", headers=self._headers())
-            _raise_for_status(response)
-            return response.json()
-
-    def project_verbs(self, project_id: int) -> list[str]:
-        """What the caller may do in this project, as Central sees it."""
-        with self._client() as http:
-            response = http.get(
-                f"/v1/projects/{project_id}",
-                params={"verbs": "true"},
-                headers=self._headers(),
-            )
-            _raise_for_status(response)
-            return list(response.json().get("verbs") or [])
-
-    def project_assignments(self, project_id: int) -> list[dict[str, Any]]:
-        with self._client() as http:
-            response = http.get(
-                f"/v1/projects/{project_id}/assignments",
-                headers=self._headers({"X-Extended-Metadata": "true"}),
-            )
-            _raise_for_status(response)
-            return response.json()
-
-    def assign_role(self, project_id: int, role: str, actor_id: int) -> None:
-        with self._client() as http:
-            response = http.post(
-                f"/v1/projects/{project_id}/assignments/{_seg(role)}/{actor_id}",
-                headers=self._headers(),
-            )
-            _raise_for_status(response)
-
-    def revoke_role(self, project_id: int, role: str, actor_id: int) -> None:
-        with self._client() as http:
-            response = http.delete(
-                f"/v1/projects/{project_id}/assignments/{_seg(role)}/{actor_id}",
-                headers=self._headers(),
-            )
-            _raise_for_status(response)
-
-    # -- reviewing submissions --------------------------------------------
-
-    def submissions(self, project_id: int, xml_form_id: str) -> list[dict[str, Any]]:
-        with self._client() as http:
-            response = http.get(
-                f"/v1/projects/{project_id}/forms/{_seg(xml_form_id)}/submissions",
-                headers=self._headers({"X-Extended-Metadata": "true"}),
-            )
-            _raise_for_status(response)
-            return response.json()
-
-    def review_submission(
-        self, project_id: int, xml_form_id: str, instance_id: str, review_state: str
-    ) -> dict[str, Any]:
-        with self._client() as http:
-            response = http.patch(
-                f"/v1/projects/{project_id}/forms/{_seg(xml_form_id)}"
-                f"/submissions/{_seg(instance_id)}",
-                json={"reviewState": review_state},
-                headers=self._headers(),
-            )
+            response = http.get("/v1/users/current", headers=self._headers())
             _raise_for_status(response)
             return response.json()
 
